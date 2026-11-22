@@ -112,7 +112,9 @@ jobs:
       matrix:
         checks:
           - advisories
-          - bans licenses sources
+          - bans
+          - licenses
+          - sources
 
     steps:
       - name: Checkout repository

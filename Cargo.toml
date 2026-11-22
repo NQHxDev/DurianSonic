@@ -3,6 +3,7 @@ name = "durian-sonic"
 version = "0.1.0"
 edition = "2021"
 authors = ["NQHxDev"]
+license = "MIT OR Apache-2.0"
 
 [lib]
 name = "durian_sonic"
