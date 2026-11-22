@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: GitHub Discussions
+    url: https://github.com/NQHxDev/DurianSonic/discussions
+    about: Thảo luận chung, chia sẻ ý tưởng, và hỏi đáp cộng đồng
+  - name: Security Vulnerability
+    url: https://github.com/NQHxDev/DurianSonic/security/advisories/new
+    about: Báo cáo lỗ hổng bảo mật

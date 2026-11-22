@@ -1,0 +1,30 @@
+{
+    "editor.formatOnSave": true,
+    "explorer.fileNesting.enabled": true,
+    "explorer.fileNesting.expand": false,
+    "explorer.fileNesting.patterns": {
+        ".prettierrc": ".prettierignore",
+        ".markdownlint.json": ".markdownlintignore"
+    },
+    "[rust]": {
+        "editor.formatOnSave": true,
+        "editor.defaultFormatter": "rust-lang.rust-analyzer"
+    },
+    "rust-analyzer.rustfmt.extraArgs": ["--config-path", "${workspaceFolder}/rustfmt.toml"],
+    "files.exclude": {
+        "**/target": true,
+        "**/.git": true
+    },
+    "search.exclude": {
+        "**/target": true,
+        "**/.git": true,
+        "**/Cargo.lock": true
+    },
+    "files.watcherExclude": {
+        "**/target/**": true,
+        "**/.git/objects/**": true,
+        "**/.git/subtree-cache/**": true,
+        "**/Cargo.lock": true
+    },
+    "cSpell.words": ["clippy", "serde", "taiki", "thiserror"]
+}

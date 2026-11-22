@@ -1,0 +1,8 @@
+[training]
+epochs = 100
+batch_size = 32
+learning_rate = 0.001
+
+[model]
+hidden_layers = [128, 64]
+activation = "relu"

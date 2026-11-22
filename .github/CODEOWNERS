@@ -1,0 +1,11 @@
+# Default owner
+* @NQHxDev
+
+# Code owners cho specific paths
+/src/ @NQHxDev
+*.rs @NQHxDev
+/docs/ @NQHxDev
+
+# Config files
+Cargo.toml @NQHxDev
+.github/ @NQHxDev
