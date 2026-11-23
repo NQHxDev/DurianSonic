@@ -1,0 +1,165 @@
+name: Security Audit
+
+on:
+  schedule:
+    - cron: '0 0 * * *'
+  push:
+    paths:
+      - 'Cargo.lock'
+      - 'Cargo.toml'
+      - '.github/workflows/security-audit.yml'
+  pull_request:
+    paths:
+      - 'Cargo.lock'
+      - 'Cargo.toml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: write
+  security-events: write
+
+jobs:
+  security-audit:
+    name: Cargo Audit Security Scan
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Set up Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry
+        uses: actions/cache@v6
+        with:
+          path: ~/.cargo/registry/index
+          key: ${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-registry-
+
+      - name: Install cargo-audit
+        run: cargo install cargo-audit --locked
+
+      - name: Run cargo audit
+        id: audit
+        continue-on-error: true
+        run: |
+          cargo audit --json > audit-results.json
+          echo "exit_code=$?" >> $GITHUB_OUTPUT
+
+      - name: Parse audit results
+        id: parse
+        if: always()
+        run: |
+          if [ -f audit-results.json ]; then
+            vulnerabilities=$(jq '.vulnerabilities.count' audit-results.json)
+            warnings=$(jq '.warnings | length' audit-results.json)
+            echo "vulnerabilities=$vulnerabilities" >> $GITHUB_OUTPUT
+            echo "warnings=$warnings" >> $GITHUB_OUTPUT
+
+            echo "### Security Audit Results" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "- Vulnerabilities found: **$vulnerabilities**" >> $GITHUB_STEP_SUMMARY
+            echo "- Warnings: **$warnings**" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "vulnerabilities=0" >> $GITHUB_OUTPUT
+            echo "warnings=0" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Display full audit report
+        if: always()
+        run: |
+          echo "Full security audit report:"
+          cargo audit
+
+      - name: Upload audit results
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: security-audit-results
+          path: audit-results.json
+          retention-days: 90
+
+      - name: Check for vulnerabilities
+        if: steps.parse.outputs.vulnerabilities != '0'
+        run: |
+          echo "::error::Found ${{ steps.parse.outputs.vulnerabilities }} security vulnerabilities!"
+          exit 1
+
+  dependency-review:
+    name: Dependency Review
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Dependency Review
+        uses: actions/dependency-review-action@v4
+        with:
+          fail-on-severity: moderate
+          comment-summary-in-pr: true
+
+  cargo-deny:
+    name: Cargo Deny Check
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        checks:
+          - advisories
+          - bans
+          - licenses
+          - sources
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Set up Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install cargo-deny
+        run: cargo install cargo-deny --locked
+
+      - name: Run cargo deny (${{ matrix.checks }})
+        run: cargo deny check ${{ matrix.checks }}
+
+  security-checks-complete:
+    name: Security Checks Complete
+    runs-on: ubuntu-latest
+    needs: [security-audit, dependency-review, cargo-deny]
+    if: always()
+
+    steps:
+      - name: Check all job results
+        run: |
+          echo "Checking security jobs status..."
+
+          # security-audit: must succeed
+          if [ "${{ needs.security-audit.result }}" != "success" ]; then
+            echo "::error::Security audit failed or was cancelled"
+            exit 1
+          fi
+
+          # cargo-deny: must succeed
+          if [ "${{ needs.cargo-deny.result }}" != "success" ]; then
+            echo "::error::Cargo deny checks failed or were cancelled"
+            exit 1
+          fi
+
+          # dependency-review: must succeed IF it ran (only on PRs)
+          if [ "${{ needs.dependency-review.result }}" != "success" ] && [ "${{ needs.dependency-review.result }}" != "skipped" ]; then
+            echo "::error::Dependency review failed or was cancelled"
+            exit 1
+          fi
+
+          echo "All security checks passed!"
+          echo "### Security Checks Complete" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "All security audit checks have passed successfully." >> $GITHUB_STEP_SUMMARY

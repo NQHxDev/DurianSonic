@@ -1,0 +1,20 @@
+# Build output
+target/
+
+# Dependencies
+node_modules/
+vendor/
+
+# Generated documentation
+doc/
+docs/book/
+
+# Git
+.git/
+
+# IDE
+.vscode/
+.idea/
+
+# Changelog (often has duplicate headings)
+# CHANGELOG.md
