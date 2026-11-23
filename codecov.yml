@@ -4,10 +4,13 @@ coverage:
       default:
         target: 85%
         threshold: 1%
+        informational: false
+        only_pulls: false
     patch:
       default:
         target: 85%
         threshold: 1%
+        informational: false
 
 comment:
   layout: 'reach,diff,flags,tree'
