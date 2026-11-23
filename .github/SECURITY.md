@@ -128,10 +128,10 @@ Chúng tôi theo nguyên tắc **Coordinated Disclosure**:
 
 ## Phiên Bản Được Hỗ Trợ
 
-| Version | Supported          | Status       |
-| ------- | ------------------ | ------------ |
-| 0.1.x   | :white_check_mark: | Development  |
-| < 0.1.0 | :x:                | Not released |
+| Version | Supported | Status       |
+| ------- | --------- | ------------ |
+| 0.1.x   | Yes       | Development  |
+| < 0.1.0 | No        | Not released |
 
 **Lưu ý**: Hiện tại dự án đang trong giai đoạn phát triển ban đầu (0.x.x).
 Chúng tôi sẽ cập nhật chính sách hỗ trợ khi đạt version 1.0.0.
