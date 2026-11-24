@@ -1,6 +1,9 @@
 use criterion::{criterion_group, criterion_main, Criterion};
 use std::hint::black_box;
 
+use durian_sonic::dsp::{
+    compute_tap_features, extract_tap_impulses, ImpulseConfig, SpectrogramConfig,
+};
 use durian_sonic::training::{GradientDescent, LearningRateSchedule};
 
 fn benchmark_gradient_descent(c: &mut Criterion) {
@@ -69,11 +72,44 @@ fn benchmark_model_training(c: &mut Criterion) {
     group.finish();
 }
 
+fn benchmark_dsp_pipeline(c: &mut Criterion) {
+    let mut group = c.benchmark_group("dsp_pipeline");
+
+    // Create synthetic 0.8s tap window (17,640 samples at 22,050 Hz)
+    let cfg = SpectrogramConfig::default();
+    let impulse_cfg = ImpulseConfig::default();
+    let win_len = impulse_cfg.window_samples();
+    let sr = impulse_cfg.target_sr;
+    let freq = 600.0;
+
+    let mut tap_window = Vec::with_capacity(win_len);
+    for i in 0..win_len {
+        let t = i as f32 / sr as f32;
+        let decay = (-t * 2.0).exp();
+        tap_window.push((2.0 * std::f32::consts::PI * freq * t).sin() * decay * 0.5);
+    }
+
+    // Benchmark: compute_tap_features (single-pass STFT + Log-Mel + 4 physics features)
+    // Target: < 4.0 ms per tap (SC-005)
+    group.bench_function("dsp_extract_tap_features", |b| {
+        b.iter(|| compute_tap_features(black_box(&tap_window), black_box(&cfg)));
+    });
+
+    // Benchmark: extract_tap_impulses (onset detection + windowing on full recording)
+    let full_recording = vec![0.3; 220_500]; // 10s synthetic recording
+    group.bench_function("dsp_extract_tap_impulses", |b| {
+        b.iter(|| extract_tap_impulses(black_box(&full_recording), black_box(&impulse_cfg)));
+    });
+
+    group.finish();
+}
+
 criterion_group!(
     benches,
     benchmark_gradient_descent,
     benchmark_learning_rate_schedules,
-    benchmark_model_training
+    benchmark_model_training,
+    benchmark_dsp_pipeline
 );
 
 criterion_main!(benches);
