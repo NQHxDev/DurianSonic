@@ -1,5 +1,6 @@
 // Module declarations
 pub mod config;
+pub mod dataset;
 pub mod training;
 
 /// Calculate mean of a vector

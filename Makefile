@@ -13,6 +13,7 @@ help:
 	@echo "Testing & Quality:"
 	@echo "  make test              - Run tests"
 	@echo "  make test-all          - Run tests with output"
+	@echo "  make verify-data       - Verify dataset"
 	@echo "  make bench             - Run benchmarks"
 	@echo "  make bench-save        - Save benchmark baseline"
 	@echo "  make coverage          - Generate code coverage report"
@@ -54,6 +55,10 @@ test:
 .PHONY: test-all
 test-all:
 	cargo test -- --nocapture --test-threads=1
+
+.PHONY: verify-data
+verify-data:
+	cargo run -- verify-dataset --config configs/default.toml --data-dir data
 
 .PHONY: bench
 bench:
