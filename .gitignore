@@ -32,3 +32,6 @@ coverage/
 *.profdata
 lcov.info
 cobertura.xml
+
+# Dataset
+data/
