@@ -2,7 +2,8 @@ use criterion::{criterion_group, criterion_main, Criterion};
 use std::hint::black_box;
 
 use durian_sonic::dsp::{
-    compute_tap_features, extract_tap_impulses, ImpulseConfig, SpectrogramConfig,
+    build_mel_filterbank, extract_tap_features, extract_tap_impulses, ImpulseConfig,
+    SpectrogramConfig,
 };
 use durian_sonic::training::{GradientDescent, LearningRateSchedule};
 
@@ -65,7 +66,7 @@ fn benchmark_model_training(c: &mut Criterion) {
 
     // Add more comprehensive training benchmarks here
     group.bench_function("forward_pass", |b| {
-        // TODO: Implement when model structure is ready
+        // Placeholder benchmark - will be implemented with model structure
         b.iter(|| black_box(42));
     });
 
@@ -89,10 +90,20 @@ fn benchmark_dsp_pipeline(c: &mut Criterion) {
         tap_window.push((2.0 * std::f32::consts::PI * freq * t).sin() * decay * 0.5);
     }
 
-    // Benchmark: compute_tap_features (single-pass STFT + Log-Mel + 4 physics features)
+    // Pre-build mel_basis for reuse across batch
+    let mel_basis =
+        build_mel_filterbank(cfg.sample_rate, cfg.n_fft, cfg.n_mels, cfg.fmin, cfg.fmax);
+
+    // Benchmark: extract_tap_features (single-pass STFT + Log-Mel + 4 physics features)
     // Target: < 4.0 ms per tap (SC-005)
     group.bench_function("dsp_extract_tap_features", |b| {
-        b.iter(|| compute_tap_features(black_box(&tap_window), black_box(&cfg)));
+        b.iter(|| {
+            extract_tap_features(
+                black_box(&tap_window),
+                black_box(&cfg),
+                black_box(&mel_basis),
+            )
+        });
     });
 
     // Benchmark: extract_tap_impulses (onset detection + windowing on full recording)

@@ -215,7 +215,10 @@ pub fn apply_spec_augment(
 
     let (n_mels, n_frames) = mel_spec.dim();
 
-    // Frequency masking
+    if n_mels < 4 || n_frames < 4 {
+        return;
+    }
+
     let f_bound = max_freq_mask.min(n_mels / 4);
     if f_bound > 0 {
         let f_mask = rng().random_range(0..=f_bound);
@@ -229,7 +232,6 @@ pub fn apply_spec_augment(
         }
     }
 
-    // Time masking
     let t_bound = max_time_mask.min(n_frames / 4);
     if t_bound > 0 {
         let t_mask = rng().random_range(0..=t_bound);

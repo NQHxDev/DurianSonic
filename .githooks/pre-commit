@@ -61,7 +61,7 @@ fi
 echo "${GREEN}✓ Staged file checks passed${NC}\n"
 
 # 4. Check for large JSON and Markdown files (>= 500KB) and track with Git LFS
-echo "${YELLOW}[4/4] Checking large JSON/MD files for Git LFS (>= 500KB)...${NC}"
+echo "${YELLOW}[4/4] Checking large JSON/MD files for Git LFS...${NC}"
 LFS_THRESHOLD_BYTES=${LFS_THRESHOLD_BYTES:-512000} # 500 KB (512,000 bytes)
 
 STAGED_DOC_FILES=$(git diff --cached --name-only --diff-filter=ACM | grep -E '\.(json|md)$' || true)

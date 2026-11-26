@@ -35,6 +35,7 @@ help:
 	@echo "  make uninstall         - Uninstall binary"
 	@echo "  make clean             - Clean build artifacts"
 	@echo "  make all               - Format, lint, test, and build"
+	@echo "  make kill              - Kill process Cargo"
 
 .PHONY: run
 run:
@@ -127,3 +128,8 @@ watch:
 
 .PHONY: all
 all: fmt clippy test build
+
+.PHONY: kill
+kill:
+	-pkill -9 cargo && sleep 1
+	@echo "Killed Cargo Processes..."

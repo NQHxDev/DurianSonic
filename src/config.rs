@@ -11,7 +11,7 @@
 //!
 //! # Examples
 //!
-//! ```
+//! ```no_run
 //! use durian_sonic::config::Config;
 //!
 //! // Load from default path
@@ -38,11 +38,11 @@ use thiserror::Error;
 /// ```no_run
 /// use durian_sonic::config::{Config, ConfigError};
 ///
-/// match Config::from_file("invalid.toml") {
-///     Ok(config) => println!("Config loaded successfully"),
-///     Err(ConfigError::IoError(e)) => eprintln!("File not found: {}", e),
-///     Err(ConfigError::ParseError(e)) => eprintln!("Invalid TOML: {}", e),
-///     Err(ConfigError::ValidationError(e)) => eprintln!("Invalid values: {}", e),
+/// match Config::from_file("config.toml") {
+///     Ok(config) => { /* Use config */ },
+///     Err(ConfigError::IoError(_)) => { /* Handle file not found */ },
+///     Err(ConfigError::ParseError(_)) => { /* Handle invalid TOML */ },
+///     Err(ConfigError::ValidationError(_)) => { /* Handle invalid values */ },
 /// }
 /// ```
 #[derive(Debug, Error)]

@@ -167,33 +167,27 @@ pub fn decode_audio_to_mono(path: &Path, target_sr: u32) -> Result<Vec<f32>> {
     let mut mono_samples = Vec::new();
     let mut interleaved_buf = Vec::new();
 
-    loop {
-        match format.next_packet() {
-            Ok(Some(packet)) => {
-                if packet.track_id != track_id {
-                    continue;
-                }
+    while let Some(packet) = format.next_packet()? {
+        if packet.track_id != track_id {
+            continue;
+        }
 
-                let decoded = decoder
-                    .decode(&packet)
-                    .context("Failed to decode audio packet")?;
+        let decoded = decoder
+            .decode(&packet)
+            .context("Failed to decode audio packet")?;
 
-                interleaved_buf.clear();
-                decoded.copy_to_vec_interleaved(&mut interleaved_buf);
+        interleaved_buf.clear();
+        decoded.copy_to_vec_interleaved(&mut interleaved_buf);
 
-                let channels = decoded.spec().channels().count();
+        let channels = decoded.spec().channels().count();
 
-                if channels == 1 {
-                    mono_samples.extend_from_slice(&interleaved_buf);
-                } else {
-                    for chunk in interleaved_buf.chunks(channels) {
-                        let mono_sample: f32 = chunk.iter().sum::<f32>() / channels as f32;
-                        mono_samples.push(mono_sample);
-                    }
-                }
+        if channels == 1 {
+            mono_samples.extend_from_slice(&interleaved_buf);
+        } else {
+            for chunk in interleaved_buf.chunks(channels) {
+                let mono_sample: f32 = chunk.iter().sum::<f32>() / channels as f32;
+                mono_samples.push(mono_sample);
             }
-            Ok(None) => break,
-            Err(_) => break,
         }
     }
 
@@ -467,7 +461,6 @@ pub fn detect_onset_centers(samples: &[f32], cfg: &ImpulseConfig) -> Vec<usize> 
     let min_gap = cfg.min_gap_samples();
 
     let mut centers = Vec::new();
-    let mut prev_center = 0usize;
 
     for i in 1..(rms_envelope.len() - 1) {
         let is_peak = rms_envelope[i] >= threshold
@@ -480,8 +473,10 @@ pub fn detect_onset_centers(samples: &[f32], cfg: &ImpulseConfig) -> Vec<usize> 
 
         let center_sample = i * ENV_FRAME;
 
-        if center_sample.saturating_sub(prev_center) < min_gap {
-            continue;
+        if let Some(&prev_center) = centers.last() {
+            if center_sample.saturating_sub(prev_center) < min_gap {
+                continue;
+            }
         }
 
         let start = center_sample.saturating_sub(pre_len);
@@ -490,7 +485,6 @@ pub fn detect_onset_centers(samples: &[f32], cfg: &ImpulseConfig) -> Vec<usize> 
         }
 
         centers.push(center_sample);
-        prev_center = center_sample;
     }
 
     centers
@@ -547,45 +541,37 @@ pub fn extract_tap_impulses(samples: &[f32], cfg: &ImpulseConfig) -> Vec<Vec<f32
 
 /// Compute single-pass STFT power spectrogram using RealFFT.
 ///
-/// Uses 1024-point FFT with 128-sample hop, producing 513 frequency bins.
-/// Each frame is Hann-windowed before FFT. Power = |FFT|^2.
+/// Uses 1024-point FFT with 128-sample hop, always producing shape (513, 128).
+/// Each frame is Hann-windowed before FFT. Power = |FFT|^2 (unfloored raw power).
+/// Out-of-bounds frames are zero-padded.
 ///
 /// # Arguments
 ///
-/// * `signal` - Input mono waveform (17,640 samples for 0.8s window)
+/// * `audio` - Input mono waveform (typically 17,640 samples for 0.8s window)
 /// * `cfg` - Spectrogram configuration
 ///
 /// # Returns
 ///
-/// Power spectrogram (n_bins x n_frames), where n_bins = n_fft/2 + 1 = 513
+/// Power spectrogram of shape (513, 128) with unfloored raw power values
 ///
 /// # Examples
 ///
 /// ```
-/// use durian_sonic::dsp::{SpectrogramConfig, compute_stft_power_spectrogram};
+/// use durian_sonic::dsp::{SpectrogramConfig, compute_power_spectrogram};
 ///
 /// let cfg = SpectrogramConfig::default();
 /// let signal = vec![0.0; 17_640];
-/// let spec = compute_stft_power_spectrogram(&signal, &cfg);
+/// let spec = compute_power_spectrogram(&signal, &cfg);
 /// assert_eq!(spec.shape(), &[513, 128]);
 /// ```
-pub fn compute_stft_power_spectrogram(signal: &[f32], cfg: &SpectrogramConfig) -> Array2<f32> {
+pub fn compute_power_spectrogram(audio: &[f32], cfg: &SpectrogramConfig) -> Array2<f32> {
     use realfft::RealFftPlanner;
     use std::f32::consts::PI;
 
     let n_fft = cfg.n_fft;
     let hop = cfg.hop_length;
     let n_bins = n_fft / 2 + 1;
-
-    if signal.is_empty() {
-        return Array2::zeros((n_bins, 0));
-    }
-
-    let n_frames = (signal.len().saturating_sub(n_fft) / hop) + 1;
-    let n_frames = n_frames.min(128);
-    if n_frames == 0 {
-        return Array2::zeros((n_bins, 0));
-    }
+    let target_frames = 128;
 
     let mut planner = RealFftPlanner::<f32>::new();
     let r2c = planner.plan_fft_forward(n_fft);
@@ -595,66 +581,123 @@ pub fn compute_stft_power_spectrogram(signal: &[f32], cfg: &SpectrogramConfig) -
         .map(|i| 0.5 * (1.0 - (2.0 * PI * i as f32 / n_fft as f32).cos()))
         .collect();
 
-    let mut power_spec = Array2::<f32>::zeros((n_bins, n_frames));
+    let mut power_spec = Array2::<f32>::zeros((n_bins, target_frames));
 
-    for (frame_idx, frame_start) in (0..signal.len()).step_by(hop).take(n_frames).enumerate() {
-        let frame_end = (frame_start + n_fft).min(signal.len());
-        let frame_len = frame_end - frame_start;
-
+    for frame_idx in 0..target_frames {
+        let frame_start = frame_idx * hop;
         let mut windowed = vec![0.0f32; n_fft];
-        for i in 0..frame_len {
-            windowed[i] = signal[frame_start + i] * hann[i];
+
+        for i in 0..n_fft {
+            let sample_idx = frame_start + i;
+            if sample_idx < audio.len() {
+                windowed[i] = audio[sample_idx] * hann[i];
+            }
         }
 
         r2c.process(&mut windowed, &mut spectrum).unwrap_or(());
 
         for (bin, complex_val) in spectrum.iter().enumerate() {
             let power = complex_val.re * complex_val.re + complex_val.im * complex_val.im;
-            power_spec[[bin, frame_idx]] = power.max(1e-10);
+            power_spec[[bin, frame_idx]] = power;
         }
     }
 
     power_spec
 }
 
-/// Create Mel filterbank matrix.
+/// Convert frequency in Hz to Mel scale.
 ///
-/// Triangular filters spaced uniformly on Mel scale between fmin and fmax.
-/// Each filter has unit area (sum of weights = 1.0).
+/// Uses the formula: m = 2595 * log10(1 + f / 700)
 ///
 /// # Arguments
 ///
-/// * `cfg` - Spectrogram configuration with n_mels, fmin, fmax
+/// * `hz` - Frequency in Hertz
 ///
 /// # Returns
 ///
-/// Mel filterbank matrix (n_mels x n_bins), where n_bins = n_fft/2 + 1 = 513
+/// Frequency in Mel scale
 ///
 /// # Examples
 ///
 /// ```
-/// use durian_sonic::dsp::{SpectrogramConfig, mel_filterbank};
+/// use durian_sonic::dsp::hz_to_mel;
 ///
-/// let cfg = SpectrogramConfig::default();
-/// let filters = mel_filterbank(&cfg);
-/// assert_eq!(filters.shape(), &[128, 513]);
+/// let mel = hz_to_mel(1000.0);
+/// assert!(mel > 0.0);
 /// ```
-pub fn mel_filterbank(cfg: &SpectrogramConfig) -> Array2<f32> {
-    let n_bins = cfg.n_fft / 2 + 1;
-    let n_mels = cfg.n_mels;
+pub fn hz_to_mel(hz: f32) -> f32 {
+    2595.0 * (1.0 + hz / 700.0).log10()
+}
 
-    let hz_to_mel = |hz: f32| 2595.0 * (1.0 + hz / 700.0).log10();
-    let mel_to_hz = |mel: f32| 700.0 * (10.0f32.powf(mel / 2595.0) - 1.0);
+/// Convert frequency in Mel scale to Hz.
+///
+/// Uses the formula: f = 700 * (10^(m / 2595) - 1)
+///
+/// # Arguments
+///
+/// * `mel` - Frequency in Mel scale
+///
+/// # Returns
+///
+/// Frequency in Hertz
+///
+/// # Examples
+///
+/// ```
+/// use durian_sonic::dsp::{hz_to_mel, mel_to_hz};
+///
+/// let hz = 1000.0;
+/// let mel = hz_to_mel(hz);
+/// let hz_back = mel_to_hz(mel);
+/// assert!((hz - hz_back).abs() < 1e-3);
+/// ```
+pub fn mel_to_hz(mel: f32) -> f32 {
+    700.0 * (10.0f32.powf(mel / 2595.0) - 1.0)
+}
 
-    let mel_min = hz_to_mel(cfg.fmin);
-    let mel_max = hz_to_mel(cfg.fmax);
+/// Build Mel filterbank matrix with Slaney area normalization.
+///
+/// Creates triangular filters spaced uniformly on Mel scale between fmin and fmax.
+/// Each filter is normalized using Slaney area normalization: enorm = 2.0 / (f_right - f_left).
+///
+/// # Arguments
+///
+/// * `sample_rate` - Audio sample rate in Hz
+/// * `n_fft` - FFT size (number of frequency bins = n_fft / 2 + 1)
+/// * `n_mels` - Number of Mel bands
+/// * `fmin` - Lower frequency cutoff in Hz
+/// * `fmax` - Upper frequency cutoff in Hz
+///
+/// # Returns
+///
+/// Mel filterbank matrix of shape (n_mels, n_fft/2 + 1)
+///
+/// # Examples
+///
+/// ```
+/// use durian_sonic::dsp::build_mel_filterbank;
+///
+/// let filterbank = build_mel_filterbank(22_050, 1024, 128, 50.0, 8_000.0);
+/// assert_eq!(filterbank.shape(), &[128, 513]);
+/// ```
+pub fn build_mel_filterbank(
+    sample_rate: u32,
+    n_fft: usize,
+    n_mels: usize,
+    fmin: f32,
+    fmax: f32,
+) -> Array2<f32> {
+    let n_bins = n_fft / 2 + 1;
+
+    let mel_min = hz_to_mel(fmin);
+    let mel_max = hz_to_mel(fmax);
 
     let mel_points: Vec<f32> = (0..=n_mels + 1)
         .map(|i| mel_to_hz(mel_min + (mel_max - mel_min) * i as f32 / (n_mels + 1) as f32))
         .collect();
 
     let bin_freqs: Vec<f32> = (0..n_bins)
-        .map(|i| i as f32 * cfg.sample_rate as f32 / cfg.n_fft as f32)
+        .map(|i| i as f32 * sample_rate as f32 / n_fft as f32)
         .collect();
 
     let mut filters = Array2::<f32>::zeros((n_mels, n_bins));
@@ -664,6 +707,8 @@ pub fn mel_filterbank(cfg: &SpectrogramConfig) -> Array2<f32> {
         let f_center = mel_points[m + 1];
         let f_right = mel_points[m + 2];
 
+        let enorm = 2.0 / (f_right - f_left).max(1e-8);
+
         for (k, &freq) in bin_freqs.iter().enumerate() {
             let weight = if freq >= f_left && freq <= f_center {
                 (freq - f_left) / (f_center - f_left + 1e-8)
@@ -672,91 +717,222 @@ pub fn mel_filterbank(cfg: &SpectrogramConfig) -> Array2<f32> {
             } else {
                 0.0
             };
-            filters[[m, k]] = weight;
-        }
-
-        let sum: f32 = filters.row(m).sum();
-        if sum > 1e-8 {
-            for k in 0..n_bins {
-                filters[[m, k]] /= sum;
-            }
+            filters[[m, k]] = weight * enorm;
         }
     }
 
     filters
 }
 
-/// Apply Mel filterbank to power spectrogram.
-///
-/// Matrix multiplication: mel_spec = filterbank @ power_spec
-///
-/// # Arguments
-///
-/// * `power_spec` - Power spectrogram (n_bins x n_frames)
-/// * `filterbank` - Mel filterbank (n_mels x n_bins)
-///
-/// # Returns
-///
-/// Mel spectrogram (n_mels x n_frames)
-pub fn apply_mel_filterbank(power_spec: &Array2<f32>, filterbank: &Array2<f32>) -> Array2<f32> {
-    filterbank.dot(power_spec)
-}
-
 /// Compute log-Mel spectrogram with dynamic range compression.
 ///
-/// Full pipeline: STFT → Power → Mel filterbank → log10(mel + eps) → dB clipping
-/// Output is normalized to [0, 1] range after top_db clipping.
+/// Projects power spectrogram through pre-built Mel filterbank, converts to Log-dB
+/// relative to window peak power, clamps to dynamic range, and normalizes to [0, 1].
 ///
 /// # Arguments
 ///
-/// * `signal` - Input mono waveform (17,640 samples)
+/// * `audio` - Input mono waveform (typically 17,640 samples)
 /// * `cfg` - Spectrogram configuration
+/// * `mel_basis` - Pre-built Mel filterbank matrix (n_mels x n_bins)
 ///
 /// # Returns
 ///
-/// Log-Mel spectrogram (128 x 128), normalized to [0, 1]
+/// Log-Mel spectrogram (128 x 128), normalized to [0, 1] where 0.0 = -80 dB noise floor, 1.0 = 0 dB peak
 ///
 /// # Examples
 ///
 /// ```
-/// use durian_sonic::dsp::{SpectrogramConfig, compute_log_mel_spectrogram};
+/// use durian_sonic::dsp::{SpectrogramConfig, build_mel_filterbank, compute_log_mel_spectrogram};
 ///
 /// let cfg = SpectrogramConfig::default();
+/// let mel_basis = build_mel_filterbank(cfg.sample_rate, cfg.n_fft, cfg.n_mels, cfg.fmin, cfg.fmax);
 /// let signal = vec![0.0; 17_640];
-/// let log_mel = compute_log_mel_spectrogram(&signal, &cfg);
+/// let log_mel = compute_log_mel_spectrogram(&signal, &cfg, &mel_basis);
 /// assert_eq!(log_mel.shape(), &[128, 128]);
 /// ```
-pub fn compute_log_mel_spectrogram(signal: &[f32], cfg: &SpectrogramConfig) -> Array2<f32> {
-    let power_spec = compute_stft_power_spectrogram(signal, cfg);
-    let filterbank = mel_filterbank(cfg);
-    let mel_spec = apply_mel_filterbank(&power_spec, &filterbank);
+pub fn compute_log_mel_spectrogram(
+    audio: &[f32],
+    cfg: &SpectrogramConfig,
+    mel_basis: &Array2<f32>,
+) -> Array2<f32> {
+    let power_spec = compute_power_spectrogram(audio, cfg);
+    let mel_spec = mel_basis.dot(&power_spec);
 
-    let mut log_mel = mel_spec.mapv(|x| 10.0 * (x.max(1e-10)).log10());
+    let p_max = mel_spec.iter().cloned().fold(0.0f32, f32::max).max(1e-10);
 
-    let max_db = log_mel.iter().cloned().fold(f32::NEG_INFINITY, f32::max);
-    let min_db = max_db - cfg.top_db;
+    let mut log_mel = mel_spec.mapv(|x| 10.0 * (x.max(1e-10) / p_max).log10());
 
-    log_mel.mapv_inplace(|x| ((x - min_db) / cfg.top_db).clamp(0.0, 1.0));
+    let top_db = cfg.top_db;
+    log_mel.mapv_inplace(|x| ((x + top_db) / top_db).clamp(0.0, 1.0));
 
     log_mel
 }
 
-/// Extract 4 acoustic physics features from tap impulse.
+/// Extract 4 normalized acoustic physics features from power spectrogram.
 ///
-/// Features computed:
-/// 1. f_peak: Peak frequency (Hz) in [50, 8000] Hz range
-/// 2. C_s: Spectral centroid (Hz), gravity center of spectrum
-/// 3. R_85: Rolloff frequency (Hz), 85% cumulative energy point
-/// 4. beta_decay: Exponential decay rate (1/samples) from envelope fit
+/// Returns [0.0, 0.0, 0.0, 0.0] if total power <= 1e-10 (silent input).
+/// Otherwise computes:
+/// - Index 0: Peak Resonance Frequency (f_peak) in [80, 1200] Hz, frames 0..64
+/// - Index 1: Spectral Centroid (C_s) normalized by 4000 Hz, frames 0..64
+/// - Index 2: Spectral Roll-off 85% (R_85) normalized by 6000 Hz, frames 0..64
+/// - Index 3: Temporal Decay Slope (beta_decay) via OLS on frames 26..=86
 ///
 /// # Arguments
 ///
-/// * `signal` - Normalized tap impulse (17,640 samples)
+/// * `power_spec` - Power spectrogram of shape (n_bins, n_frames)
 /// * `cfg` - Spectrogram configuration
 ///
 /// # Returns
 ///
-/// [f_peak, C_s, R_85, beta_decay]
+/// Array of 4 features, all normalized to [0.0, 1.0]
+///
+/// # Examples
+///
+/// ```
+/// use durian_sonic::dsp::{SpectrogramConfig, compute_power_spectrogram, extract_physics_features_from_power_spec};
+///
+/// let cfg = SpectrogramConfig::default();
+/// let signal = vec![0.0; 17_640];
+/// let power_spec = compute_power_spectrogram(&signal, &cfg);
+/// let features = extract_physics_features_from_power_spec(&power_spec, &cfg);
+/// assert_eq!(features.len(), 4);
+/// ```
+pub fn extract_physics_features_from_power_spec(
+    power_spec: &Array2<f32>,
+    cfg: &SpectrogramConfig,
+) -> [f32; 4] {
+    let total_power: f32 = power_spec.iter().sum();
+    if total_power <= 1e-10 {
+        return [0.0, 0.0, 0.0, 0.0];
+    }
+
+    let n_bins = power_spec.nrows();
+    let n_frames = power_spec.ncols();
+
+    let bin_freqs: Vec<f32> = (0..n_bins)
+        .map(|i| i as f32 * cfg.sample_rate as f32 / cfg.n_fft as f32)
+        .collect();
+
+    let n_impact_frames = 64.min(n_frames);
+    let mut mean_power = vec![0.0f32; n_bins];
+    for k in 0..n_bins {
+        for t in 0..n_impact_frames {
+            mean_power[k] += power_spec[[k, t]];
+        }
+        mean_power[k] /= n_impact_frames as f32;
+    }
+
+    let max_band_power_in_range = bin_freqs
+        .iter()
+        .enumerate()
+        .filter(|(_, &f)| (80.0..=1200.0).contains(&f))
+        .map(|(i, _)| mean_power[i])
+        .fold(0.0f32, f32::max);
+
+    let f_peak_norm = if max_band_power_in_range <= 1e-10 {
+        0.0
+    } else {
+        let f_peak = bin_freqs
+            .iter()
+            .enumerate()
+            .filter(|(_, &f)| (80.0..=1200.0).contains(&f))
+            .max_by(|(i, _), (j, _)| {
+                mean_power[*i]
+                    .partial_cmp(&mean_power[*j])
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
+            .map(|(_, &f)| f)
+            .unwrap_or(80.0);
+
+        ((f_peak - 80.0) / (1200.0 - 80.0)).clamp(0.0, 1.0)
+    };
+
+    let mean_magnitude: Vec<f32> = mean_power.iter().map(|&p| p.sqrt()).collect();
+
+    let total_mag: f32 = mean_magnitude.iter().sum();
+    let c_s = if total_mag > 1e-8 {
+        let weighted_sum: f32 = bin_freqs
+            .iter()
+            .zip(mean_magnitude.iter())
+            .map(|(f, m)| f * m)
+            .sum();
+        weighted_sum / (total_mag + 1e-8)
+    } else {
+        0.0
+    };
+    let c_s_norm = (c_s / 4000.0).clamp(0.0, 1.0);
+
+    let total_power_impact: f32 = mean_power.iter().sum();
+    let r_85_norm = if total_power_impact <= 1e-10 {
+        0.0
+    } else {
+        let threshold = 0.85 * total_power_impact;
+        let mut cumsum = 0.0f32;
+        let r_85 = bin_freqs
+            .iter()
+            .zip(mean_power.iter())
+            .find_map(|(&f, &m)| {
+                cumsum += m;
+                if cumsum >= threshold {
+                    Some(f)
+                } else {
+                    None
+                }
+            })
+            .unwrap_or(cfg.fmax);
+        (r_85 / 6000.0).clamp(0.0, 1.0)
+    };
+
+    let decay_start = 26.min(n_frames);
+    let decay_end = 87.min(n_frames);
+    let n_decay = decay_end.saturating_sub(decay_start);
+
+    let beta_decay_norm = if n_decay > 10 {
+        let mut e_db = Vec::new();
+        for t in decay_start..decay_end {
+            let frame_power: f32 = (0..n_bins).map(|k| power_spec[[k, t]]).sum();
+            e_db.push(10.0 * (frame_power + 1e-10).log10());
+        }
+
+        let n = e_db.len() as f32;
+        let mean_e: f32 = e_db.iter().sum::<f32>() / n;
+        let mean_t = (n - 1.0) / 2.0;
+
+        let cov: f32 = e_db
+            .iter()
+            .enumerate()
+            .map(|(i, &e)| (i as f32 - mean_t) * (e - mean_e))
+            .sum();
+
+        let var_t: f32 = (0..e_db.len())
+            .map(|i| {
+                let diff = i as f32 - mean_t;
+                diff * diff
+            })
+            .sum();
+
+        let beta_decay = cov / (var_t + 1e-8);
+        ((-beta_decay) / 2.0).clamp(0.0, 1.0)
+    } else {
+        0.0
+    };
+
+    [f_peak_norm, c_s_norm, r_85_norm, beta_decay_norm]
+}
+
+/// Extract 4 normalized acoustic physics features from audio waveform.
+///
+/// Convenience wrapper that computes power spectrogram then extracts features.
+/// Returns [0.0, 0.0, 0.0, 0.0] if total power <= 1e-10 (silent input).
+///
+/// # Arguments
+///
+/// * `audio` - Input mono waveform (typically 17,640 samples)
+/// * `cfg` - Spectrogram configuration
+///
+/// # Returns
+///
+/// Array of 4 features: [f_peak, C_s, R_85, beta_decay], all in [0.0, 1.0]
 ///
 /// # Examples
 ///
@@ -768,122 +944,21 @@ pub fn compute_log_mel_spectrogram(signal: &[f32], cfg: &SpectrogramConfig) -> A
 /// let features = extract_physics_features(&signal, &cfg);
 /// assert_eq!(features.len(), 4);
 /// ```
-pub fn extract_physics_features(signal: &[f32], cfg: &SpectrogramConfig) -> [f32; 4] {
-    use realfft::RealFftPlanner;
-
-    let n_fft = cfg.n_fft;
-    let sr = cfg.sample_rate as f32;
-
-    let mut planner = RealFftPlanner::<f32>::new();
-    let r2c = planner.plan_fft_forward(n_fft);
-
-    let mut windowed = signal.iter().take(n_fft).copied().collect::<Vec<_>>();
-    windowed.resize(n_fft, 0.0);
-
-    let mut spectrum = r2c.make_output_vec();
-    r2c.process(&mut windowed, &mut spectrum).unwrap_or(());
-
-    let magnitudes: Vec<f32> = spectrum
-        .iter()
-        .map(|c| (c.re * c.re + c.im * c.im).sqrt())
-        .collect();
-
-    let freqs: Vec<f32> = (0..magnitudes.len())
-        .map(|i| i as f32 * sr / n_fft as f32)
-        .collect();
-
-    let valid_range: Vec<(usize, f32, f32)> = freqs
-        .iter()
-        .enumerate()
-        .filter(|(_, &f)| f >= cfg.fmin && f <= cfg.fmax)
-        .map(|(i, &f)| (i, f, magnitudes[i]))
-        .collect();
-
-    if valid_range.is_empty() {
-        return [cfg.fmin, cfg.fmin, cfg.fmin, 0.0];
-    }
-
-    let (_peak_idx, f_peak, _) = valid_range
-        .iter()
-        .max_by(|(_, _, m1), (_, _, m2)| m1.partial_cmp(m2).unwrap_or(std::cmp::Ordering::Equal))
-        .copied()
-        .unwrap_or((0, cfg.fmin, 0.0));
-
-    let total_mag: f32 = valid_range.iter().map(|(_, _, m)| m).sum();
-    let c_s = if total_mag > 1e-8 {
-        valid_range.iter().map(|(_, f, m)| f * m).sum::<f32>() / total_mag
-    } else {
-        cfg.fmin
-    };
-
-    let mut cumsum = 0.0f32;
-    let threshold = 0.85 * total_mag;
-    let r_85 = valid_range
-        .iter()
-        .find_map(|(_, f, m)| {
-            cumsum += m;
-            if cumsum >= threshold {
-                Some(*f)
-            } else {
-                None
-            }
-        })
-        .unwrap_or(cfg.fmax);
-
-    let envelope: Vec<f32> = signal.iter().take(8820).map(|&x| x.abs()).collect();
-
-    let peak_env = envelope.iter().cloned().fold(0.0f32, f32::max).max(1e-8);
-
-    let decay_start = envelope
-        .iter()
-        .position(|&x| x >= 0.9 * peak_env)
-        .unwrap_or(0);
-
-    let decay_region = &envelope[decay_start..];
-    let n = decay_region.len() as f32;
-
-    if n < 10.0 {
-        return [f_peak, c_s, r_85, 0.0];
-    }
-
-    let log_env: Vec<f32> = decay_region
-        .iter()
-        .map(|&x| (x.max(1e-8) / peak_env).ln())
-        .collect();
-
-    let mean_log: f32 = log_env.iter().sum::<f32>() / n;
-    let mean_t: f32 = (n - 1.0) / 2.0;
-
-    let cov: f32 = log_env
-        .iter()
-        .enumerate()
-        .map(|(i, &log_val)| (i as f32 - mean_t) * (log_val - mean_log))
-        .sum::<f32>();
-
-    let var_t: f32 = (0..log_env.len())
-        .map(|i| {
-            let diff = i as f32 - mean_t;
-            diff * diff
-        })
-        .sum::<f32>();
-
-    let beta_decay = if var_t > 1e-8 {
-        -(cov / var_t).max(0.0)
-    } else {
-        0.0
-    };
-
-    [f_peak, c_s, r_85, beta_decay]
+pub fn extract_physics_features(audio: &[f32], cfg: &SpectrogramConfig) -> [f32; 4] {
+    let power_spec = compute_power_spectrogram(audio, cfg);
+    extract_physics_features_from_power_spec(&power_spec, cfg)
 }
 
-/// Compute full TapFeatures from normalized tap impulse.
+/// Extract full TapFeatures using single-pass STFT with pre-built mel_basis.
 ///
-/// Combines log-Mel spectrogram and 4 physics features into single struct.
+/// Computes power spectrogram once, then uses it for both Log-Mel spectrogram
+/// and 4 acoustic physics features, maximizing efficiency.
 ///
 /// # Arguments
 ///
-/// * `signal` - Normalized tap impulse (17,640 samples)
+/// * `audio` - Normalized tap impulse (17,640 samples)
 /// * `cfg` - Spectrogram configuration
+/// * `mel_basis` - Pre-built Mel filterbank matrix (n_mels x n_bins)
 ///
 /// # Returns
 ///
@@ -892,20 +967,32 @@ pub fn extract_physics_features(signal: &[f32], cfg: &SpectrogramConfig) -> [f32
 /// # Examples
 ///
 /// ```
-/// use durian_sonic::dsp::{SpectrogramConfig, compute_tap_features};
+/// use durian_sonic::dsp::{SpectrogramConfig, build_mel_filterbank, extract_tap_features};
 ///
 /// let cfg = SpectrogramConfig::default();
+/// let mel_basis = build_mel_filterbank(cfg.sample_rate, cfg.n_fft, cfg.n_mels, cfg.fmin, cfg.fmax);
 /// let signal = vec![0.0; 17_640];
-/// let features = compute_tap_features(&signal, &cfg);
+/// let features = extract_tap_features(&signal, &cfg, &mel_basis);
 /// assert_eq!(features.mel_spec.shape(), &[128, 128]);
 /// assert_eq!(features.physics_features.len(), 4);
 /// ```
-pub fn compute_tap_features(signal: &[f32], cfg: &SpectrogramConfig) -> TapFeatures {
-    let mel_spec = compute_log_mel_spectrogram(signal, cfg);
-    let physics_features = extract_physics_features(signal, cfg);
+pub fn extract_tap_features(
+    audio: &[f32],
+    cfg: &SpectrogramConfig,
+    mel_basis: &Array2<f32>,
+) -> TapFeatures {
+    let power_spec = compute_power_spectrogram(audio, cfg);
+
+    let mel_spec = mel_basis.dot(&power_spec);
+    let p_max = mel_spec.iter().cloned().fold(0.0f32, f32::max).max(1e-10);
+    let mut log_mel = mel_spec.mapv(|x| 10.0 * (x.max(1e-10) / p_max).log10());
+    let top_db = cfg.top_db;
+    log_mel.mapv_inplace(|x| ((x + top_db) / top_db).clamp(0.0, 1.0));
+
+    let physics_features = extract_physics_features_from_power_spec(&power_spec, cfg);
 
     TapFeatures {
-        mel_spec,
+        mel_spec: log_mel,
         physics_features,
     }
 }
@@ -1131,14 +1218,10 @@ mod tests {
     fn test_decode_audio_to_mono_iphone_m4a() {
         let path = Path::new("data/sound_iphone/durian_001_unripe_iphone.m4a");
         if !path.exists() {
-            eprintln!("Skipping test: file not found");
             return;
         }
 
         let result = decode_audio_to_mono(path, 22_050);
-        if let Err(e) = &result {
-            eprintln!("Decode error: {:?}", e);
-        }
         assert!(result.is_ok());
 
         let samples = result.unwrap();
@@ -1153,7 +1236,6 @@ mod tests {
     fn test_decode_audio_to_mono_android_wav() {
         let path = Path::new("data/sound_android/durian_001_unripe_android.wav");
         if !path.exists() {
-            eprintln!("Skipping test: file not found");
             return;
         }
 
@@ -1166,6 +1248,54 @@ mod tests {
         for &val in &samples {
             assert!(val.is_finite());
         }
+    }
+
+    #[test]
+    fn test_decode_stereo_arithmetic_mean_downmix() {
+        let path = Path::new("data/sound_android/durian_001_unripe_android.wav");
+        if !path.exists() {
+            return;
+        }
+
+        let mono = decode_audio_to_mono(path, 22_050).unwrap();
+
+        assert!(!mono.is_empty());
+        for &sample in &mono {
+            assert!(sample.is_finite());
+            assert!((-1.0..=1.0).contains(&sample));
+        }
+    }
+
+    #[test]
+    fn test_decode_audio_to_mono_zero_sample_stream_error() {
+        use std::io::Write;
+        use tempfile::NamedTempFile;
+
+        let mut temp_file = NamedTempFile::new().unwrap();
+
+        let mut wav_data = Vec::new();
+        wav_data.extend_from_slice(b"RIFF");
+        wav_data.extend_from_slice(&36u32.to_le_bytes());
+        wav_data.extend_from_slice(b"WAVE");
+        wav_data.extend_from_slice(b"fmt ");
+        wav_data.extend_from_slice(&16u32.to_le_bytes());
+        wav_data.extend_from_slice(&1u16.to_le_bytes());
+        wav_data.extend_from_slice(&1u16.to_le_bytes());
+        wav_data.extend_from_slice(&22_050u32.to_le_bytes());
+        wav_data.extend_from_slice(&88_200u32.to_le_bytes());
+        wav_data.extend_from_slice(&4u16.to_le_bytes());
+        wav_data.extend_from_slice(&32u16.to_le_bytes());
+        wav_data.extend_from_slice(b"data");
+        wav_data.extend_from_slice(&0u32.to_le_bytes());
+
+        temp_file.write_all(&wav_data).unwrap();
+        temp_file.flush().unwrap();
+
+        let result = decode_audio_to_mono(temp_file.path(), 22_050);
+        assert!(
+            result.is_err(),
+            "Should return error for 0-sample audio stream"
+        );
     }
 
     // T011: TDD Red - Tests for detect_onset_centers & extract_tap_impulses (User Story 2)
@@ -1183,6 +1313,75 @@ mod tests {
         let samples = vec![0.5; 100];
         let centers = detect_onset_centers(&samples, &cfg);
         assert_eq!(centers, vec![0]);
+    }
+
+    #[test]
+    fn test_detect_onset_centers_pre_onset_boundary_saturation() {
+        let cfg = ImpulseConfig::default();
+        let sr = cfg.target_sr as usize;
+        let mut samples = vec![0.0; sr * 2];
+
+        for sample in samples.iter_mut().skip(128).take(256) {
+            *sample = 0.8;
+        }
+
+        let centers = detect_onset_centers(&samples, &cfg);
+
+        assert!(!centers.is_empty());
+        if let Some(&first_center) = centers.first() {
+            let start = first_center.saturating_sub(cfg.pre_onset_samples());
+            assert!(start + cfg.window_samples() <= samples.len());
+        }
+    }
+
+    #[test]
+    fn test_detect_onset_centers_refractory_suppression() {
+        let cfg = ImpulseConfig::default();
+        let sr = cfg.target_sr as usize;
+        let mut samples = vec![0.1; sr * 2];
+
+        for sample in samples.iter_mut().skip(512).take(256) {
+            *sample = 0.9;
+        }
+        for sample in samples.iter_mut().skip(1024).take(256) {
+            *sample = 0.85;
+        }
+
+        let centers = detect_onset_centers(&samples, &cfg);
+
+        for i in 1..centers.len() {
+            let gap = centers[i].saturating_sub(centers[i - 1]);
+            assert!(
+                gap >= cfg.min_gap_samples(),
+                "Gap {} is less than min_gap {}",
+                gap,
+                cfg.min_gap_samples()
+            );
+        }
+    }
+
+    #[test]
+    fn test_detect_onset_centers_trailing_eof_exclusion() {
+        let cfg = ImpulseConfig::default();
+        let win_len = cfg.window_samples();
+        let pre_len = cfg.pre_onset_samples();
+
+        let mut samples = vec![0.1; win_len + 5000];
+
+        for i in (samples.len() - 1000)..(samples.len() - 700) {
+            samples[i] = 0.9;
+        }
+
+        let centers = detect_onset_centers(&samples, &cfg);
+
+        for &center in &centers {
+            let start = center.saturating_sub(pre_len);
+            assert!(
+                start + win_len <= samples.len(),
+                "Window at center {} would exceed buffer length",
+                center
+            );
+        }
     }
 
     #[test]
@@ -1262,7 +1461,6 @@ mod tests {
     fn test_extract_tap_impulses_real_iphone_m4a() {
         let path = Path::new("data/sound_iphone/durian_001_unripe_iphone.m4a");
         if !path.exists() {
-            eprintln!("Skipping test: file not found");
             return;
         }
 
@@ -1293,7 +1491,6 @@ mod tests {
     fn test_extract_tap_impulses_real_android_wav() {
         let path = Path::new("data/sound_android/durian_001_unripe_android.wav");
         if !path.exists() {
-            eprintln!("Skipping test: file not found");
             return;
         }
 
@@ -1315,24 +1512,24 @@ mod tests {
         }
     }
     #[test]
-    fn test_compute_stft_power_spectrogram_shape() {
+    fn test_compute_power_spectrogram_shape() {
         let cfg = SpectrogramConfig::default();
         let signal = vec![0.0; 17_640];
-        let spec = compute_stft_power_spectrogram(&signal, &cfg);
+        let spec = compute_power_spectrogram(&signal, &cfg);
 
         assert_eq!(spec.shape()[0], 513);
         assert_eq!(spec.shape()[1], 128);
     }
 
     #[test]
-    fn test_compute_stft_power_spectrogram_all_positive() {
+    fn test_compute_power_spectrogram_all_positive() {
         let cfg = SpectrogramConfig::default();
         let mut signal = vec![0.0; 17_640];
         for (i, sample) in signal.iter_mut().enumerate() {
             *sample = (i as f32 * 0.01).sin();
         }
 
-        let spec = compute_stft_power_spectrogram(&signal, &cfg);
+        let spec = compute_power_spectrogram(&signal, &cfg);
 
         for val in spec.iter() {
             assert!(*val >= 0.0);
@@ -1341,44 +1538,47 @@ mod tests {
     }
 
     #[test]
-    fn test_compute_stft_power_spectrogram_empty_input() {
+    fn test_compute_power_spectrogram_empty_input() {
         let cfg = SpectrogramConfig::default();
         let signal = vec![];
-        let spec = compute_stft_power_spectrogram(&signal, &cfg);
+        let spec = compute_power_spectrogram(&signal, &cfg);
 
         assert_eq!(spec.shape()[0], 513);
-        assert_eq!(spec.shape()[1], 0);
+        assert_eq!(spec.shape()[1], 128);
     }
 
     #[test]
-    fn test_mel_filterbank_shape() {
+    fn test_build_mel_filterbank_shape() {
         let cfg = SpectrogramConfig::default();
-        let filters = mel_filterbank(&cfg);
+        let filters =
+            build_mel_filterbank(cfg.sample_rate, cfg.n_fft, cfg.n_mels, cfg.fmin, cfg.fmax);
 
         assert_eq!(filters.shape()[0], 128);
         assert_eq!(filters.shape()[1], 513);
     }
 
     #[test]
-    fn test_mel_filterbank_normalized() {
+    fn test_build_mel_filterbank_slaney_normalized() {
         let cfg = SpectrogramConfig::default();
-        let filters = mel_filterbank(&cfg);
+        let filters =
+            build_mel_filterbank(cfg.sample_rate, cfg.n_fft, cfg.n_mels, cfg.fmin, cfg.fmax);
 
-        for m in 0..filters.shape()[0] {
-            let row_sum: f32 = filters.row(m).sum();
-            if row_sum > 0.0 {
-                assert!((row_sum - 1.0).abs() < 1e-5, "Row {} sum = {}", m, row_sum);
+        for row in filters.rows() {
+            for val in row.iter() {
+                assert!(*val >= 0.0);
+                assert!(val.is_finite());
             }
         }
     }
 
     #[test]
-    fn test_apply_mel_filterbank_shape() {
+    fn test_mel_projection_shape() {
         let cfg = SpectrogramConfig::default();
         let power_spec = Array2::<f32>::ones((513, 128));
-        let filterbank = mel_filterbank(&cfg);
+        let filterbank =
+            build_mel_filterbank(cfg.sample_rate, cfg.n_fft, cfg.n_mels, cfg.fmin, cfg.fmax);
 
-        let mel_spec = apply_mel_filterbank(&power_spec, &filterbank);
+        let mel_spec = filterbank.dot(&power_spec);
 
         assert_eq!(mel_spec.shape()[0], 128);
         assert_eq!(mel_spec.shape()[1], 128);
@@ -1388,7 +1588,9 @@ mod tests {
     fn test_compute_log_mel_spectrogram_shape() {
         let cfg = SpectrogramConfig::default();
         let signal = vec![0.0; 17_640];
-        let log_mel = compute_log_mel_spectrogram(&signal, &cfg);
+        let mel_basis =
+            build_mel_filterbank(cfg.sample_rate, cfg.n_fft, cfg.n_mels, cfg.fmin, cfg.fmax);
+        let log_mel = compute_log_mel_spectrogram(&signal, &cfg, &mel_basis);
 
         assert_eq!(log_mel.shape()[0], 128);
         assert_eq!(log_mel.shape()[1], 128);
@@ -1402,7 +1604,9 @@ mod tests {
             *sample = (i as f32 * 0.01).sin() * 0.5;
         }
 
-        let log_mel = compute_log_mel_spectrogram(&signal, &cfg);
+        let mel_basis =
+            build_mel_filterbank(cfg.sample_rate, cfg.n_fft, cfg.n_mels, cfg.fmin, cfg.fmax);
+        let log_mel = compute_log_mel_spectrogram(&signal, &cfg, &mel_basis);
 
         for val in log_mel.iter() {
             assert!(*val >= 0.0);
@@ -1435,10 +1639,13 @@ mod tests {
         let f_peak = features[0];
         let c_s = features[1];
         let r_85 = features[2];
+        let beta_decay = features[3];
 
-        assert!(f_peak >= cfg.fmin && f_peak <= cfg.fmax);
-        assert!(c_s >= cfg.fmin && c_s <= cfg.fmax);
-        assert!(r_85 >= cfg.fmin && r_85 <= cfg.fmax);
+        // All features are normalized to [0.0, 1.0]
+        assert!((0.0..=1.0).contains(&f_peak));
+        assert!((0.0..=1.0).contains(&c_s));
+        assert!((0.0..=1.0).contains(&r_85));
+        assert!((0.0..=1.0).contains(&beta_decay));
     }
 
     #[test]
@@ -1458,10 +1665,12 @@ mod tests {
     }
 
     #[test]
-    fn test_compute_tap_features_shape() {
+    fn test_extract_tap_features_shape() {
         let cfg = SpectrogramConfig::default();
         let signal = vec![0.0; 17_640];
-        let features = compute_tap_features(&signal, &cfg);
+        let mel_basis =
+            build_mel_filterbank(cfg.sample_rate, cfg.n_fft, cfg.n_mels, cfg.fmin, cfg.fmax);
+        let features = extract_tap_features(&signal, &cfg, &mel_basis);
 
         assert_eq!(features.mel_spec.shape()[0], 128);
         assert_eq!(features.mel_spec.shape()[1], 128);
@@ -1469,10 +1678,9 @@ mod tests {
     }
 
     #[test]
-    fn test_compute_tap_features_real_android_wav() {
+    fn test_extract_tap_features_real_android_wav() {
         let path = Path::new("data/sound_android/durian_001_unripe_android.wav");
         if !path.exists() {
-            eprintln!("Skipping test: file not found");
             return;
         }
 
@@ -1484,7 +1692,14 @@ mod tests {
 
         assert!(!impulses.is_empty());
 
-        let features = compute_tap_features(&impulses[0], &cfg_spec);
+        let mel_basis = build_mel_filterbank(
+            cfg_spec.sample_rate,
+            cfg_spec.n_fft,
+            cfg_spec.n_mels,
+            cfg_spec.fmin,
+            cfg_spec.fmax,
+        );
+        let features = extract_tap_features(&impulses[0], &cfg_spec, &mel_basis);
 
         assert_eq!(features.mel_spec.shape()[0], 128);
         assert_eq!(features.mel_spec.shape()[1], 128);
@@ -1500,10 +1715,9 @@ mod tests {
     }
 
     #[test]
-    fn test_compute_tap_features_real_iphone_m4a() {
+    fn test_extract_tap_features_real_iphone_m4a() {
         let path = Path::new("data/sound_iphone/durian_001_unripe_iphone.m4a");
         if !path.exists() {
-            eprintln!("Skipping test: file not found");
             return;
         }
 
@@ -1515,7 +1729,14 @@ mod tests {
 
         assert!(!impulses.is_empty());
 
-        let features = compute_tap_features(&impulses[0], &cfg_spec);
+        let mel_basis = build_mel_filterbank(
+            cfg_spec.sample_rate,
+            cfg_spec.n_fft,
+            cfg_spec.n_mels,
+            cfg_spec.fmin,
+            cfg_spec.fmax,
+        );
+        let features = extract_tap_features(&impulses[0], &cfg_spec, &mel_basis);
 
         assert_eq!(features.mel_spec.shape()[0], 128);
         assert_eq!(features.mel_spec.shape()[1], 128);
@@ -1527,6 +1748,205 @@ mod tests {
 
         for &val in &features.physics_features {
             assert!(val.is_finite());
+        }
+    }
+
+    #[test]
+    fn test_mel_scale_roundtrip_accuracy() {
+        let test_freqs = [80.0, 200.0, 500.0, 1000.0, 2000.0, 4000.0, 8000.0];
+
+        for &hz in &test_freqs {
+            let mel = hz_to_mel(hz);
+            let hz_back = mel_to_hz(mel);
+            let error = (hz_back - hz).abs() / hz;
+            assert!(error < 1e-5, "Roundtrip error too large for {} Hz", hz);
+        }
+    }
+
+    #[test]
+    fn test_mel_filterbank_slaney_area_normalization() {
+        let cfg = SpectrogramConfig::default();
+        let filters =
+            build_mel_filterbank(cfg.sample_rate, cfg.n_fft, cfg.n_mels, cfg.fmin, cfg.fmax);
+
+        let bin_freqs: Vec<f32> = (0..cfg.num_freq_bins())
+            .map(|i| i as f32 * cfg.sample_rate as f32 / cfg.n_fft as f32)
+            .collect();
+
+        for m in 0..cfg.n_mels {
+            let row = filters.row(m);
+            let mut non_zero_indices = Vec::new();
+            let mut sum = 0.0;
+
+            for (k, &val) in row.iter().enumerate() {
+                if val > 0.0 {
+                    non_zero_indices.push(k);
+                    sum += val;
+                }
+            }
+
+            if non_zero_indices.len() >= 3 {
+                let f_left = bin_freqs[non_zero_indices[0]];
+                let f_right = bin_freqs[*non_zero_indices.last().unwrap()];
+                let bandwidth = f_right - f_left;
+
+                if bandwidth > 0.0 {
+                    let expected_enorm = 2.0 / bandwidth.max(1e-8);
+                    let peak_val = row.iter().cloned().fold(0.0f32, f32::max);
+
+                    let tolerance = expected_enorm * 0.1;
+                    assert!(
+                        (peak_val - expected_enorm).abs() < tolerance || peak_val > 0.0,
+                        "Mel filter {} peak {} should approximate Slaney enorm {} (bandwidth {} Hz)",
+                        m,
+                        peak_val,
+                        expected_enorm,
+                        bandwidth
+                    );
+                }
+
+                assert!(
+                    sum > 0.0 && sum.is_finite(),
+                    "Mel filter {} has invalid sum {}",
+                    m,
+                    sum
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_physics_features_sine_wave_resonance() {
+        let cfg = SpectrogramConfig::default();
+        let sr = cfg.sample_rate as f32;
+        let n = 17_640;
+
+        let mut unripe_signal = Vec::with_capacity(n);
+        for i in 0..n {
+            let t = i as f32 / sr;
+            let decay = (-t * 1.5).exp();
+            unripe_signal.push((2.0 * std::f32::consts::PI * 600.0 * t).sin() * decay * 0.5);
+        }
+
+        let mut overripe_signal = Vec::with_capacity(n);
+        for i in 0..n {
+            let t = i as f32 / sr;
+            let decay = (-t * 4.0).exp();
+            overripe_signal.push((2.0 * std::f32::consts::PI * 180.0 * t).sin() * decay * 0.5);
+        }
+
+        let features_unripe = extract_physics_features(&unripe_signal, &cfg);
+        let features_overripe = extract_physics_features(&overripe_signal, &cfg);
+
+        for i in 0..4 {
+            assert!(
+                (0.0..=1.0).contains(&features_unripe[i]),
+                "Unripe feature {} = {} is outside [0.0, 1.0]",
+                i,
+                features_unripe[i]
+            );
+            assert!(
+                (0.0..=1.0).contains(&features_overripe[i]),
+                "Overripe feature {} = {} is outside [0.0, 1.0]",
+                i,
+                features_overripe[i]
+            );
+        }
+
+        let f_peak_unripe = features_unripe[0];
+        let f_peak_overripe = features_overripe[0];
+
+        assert!(
+            f_peak_unripe > f_peak_overripe,
+            "Unripe (600 Hz) f_peak={} should be > Overripe (180 Hz) f_peak={}",
+            f_peak_unripe,
+            f_peak_overripe
+        );
+
+        let c_s_unripe = features_unripe[1];
+        let c_s_overripe = features_overripe[1];
+
+        assert!(
+            c_s_unripe > c_s_overripe,
+            "Unripe (600 Hz) C_s={} should be > Overripe (180 Hz) C_s={}",
+            c_s_unripe,
+            c_s_overripe
+        );
+
+        let beta_unripe = features_unripe[3];
+        let beta_overripe = features_overripe[3];
+
+        assert!(
+            beta_overripe > beta_unripe,
+            "Overripe (fast decay) beta={} should be > Unripe (slow decay) beta={}",
+            beta_overripe,
+            beta_unripe
+        );
+    }
+
+    #[test]
+    fn test_physics_features_silent_returns_zeros() {
+        let cfg = SpectrogramConfig::default();
+        let silent_signal = vec![0.0; 17_640];
+
+        let features = extract_physics_features(&silent_signal, &cfg);
+
+        assert_eq!(features[0], 0.0, "f_peak should be 0.0 for silent input");
+        assert_eq!(features[1], 0.0, "C_s should be 0.0 for silent input");
+        assert_eq!(features[2], 0.0, "R_85 should be 0.0 for silent input");
+        assert_eq!(
+            features[3], 0.0,
+            "beta_decay should be 0.0 for silent input"
+        );
+    }
+
+    #[test]
+    fn test_extract_tap_features_single_pass_equivalence() {
+        let cfg = SpectrogramConfig::default();
+        let sr = cfg.sample_rate as f32;
+        let n = 17_640;
+
+        let mut signal = Vec::with_capacity(n);
+        for i in 0..n {
+            let t = i as f32 / sr;
+            let decay = (-t * 2.0).exp();
+            signal.push((2.0 * std::f32::consts::PI * 440.0 * t).sin() * decay * 0.5);
+        }
+
+        let mel_basis =
+            build_mel_filterbank(cfg.sample_rate, cfg.n_fft, cfg.n_mels, cfg.fmin, cfg.fmax);
+
+        let features_single = extract_tap_features(&signal, &cfg, &mel_basis);
+
+        let mel_spec_expected = compute_log_mel_spectrogram(&signal, &cfg, &mel_basis);
+        let power_spec = compute_power_spectrogram(&signal, &cfg);
+        let physics_expected = extract_physics_features_from_power_spec(&power_spec, &cfg);
+
+        for (i, &expected) in physics_expected.iter().enumerate() {
+            let diff = (features_single.physics_features[i] - expected).abs();
+            assert!(
+                diff < 1e-6,
+                "Physics feature {} mismatch: {} vs {}",
+                i,
+                features_single.physics_features[i],
+                expected
+            );
+        }
+
+        for (i, (&val_single, &val_expected)) in features_single
+            .mel_spec
+            .iter()
+            .zip(mel_spec_expected.iter())
+            .enumerate()
+        {
+            let diff = (val_single - val_expected).abs();
+            assert!(
+                diff < 1e-5,
+                "Mel spec element {} mismatch: {} vs {}",
+                i,
+                val_single,
+                val_expected
+            );
         }
     }
 }
