@@ -51,9 +51,9 @@ pub struct DataSplits<'a> {
 /// Collated mini-batch structure for training and evaluation.
 ///
 /// # Field Shapes
-/// - `mel_specs`: [B, 1, 128, 128] in [0.0, 1.0]
-/// - `phys_feats`: [B, 4] in [0.0, 1.0]
-/// - `targets`: [B] in {0, 1, 2}
+/// - `mel_specs`: `[B, 1, 128, 128]` in `[0.0, 1.0]`
+/// - `phys_feats`: `[B, 4]` in `[0.0, 1.0]`
+/// - `targets`: `[B]` in `{0, 1, 2}`
 #[derive(Clone, Debug)]
 pub struct DurianBatch {
     pub mel_specs: Tensor<4>,
@@ -319,7 +319,7 @@ pub fn extract_dataset_tap_samples(
 ///
 /// # Returns
 ///
-/// DurianBatch with tensors of shape [B, 1, 128, 128], [B, 4], [B]
+/// DurianBatch with tensors of shape `[B, 1, 128, 128]`, `[B, 4]`, `[B]`
 ///
 /// # Examples
 ///
@@ -995,7 +995,7 @@ pub fn evaluate_model(
 /// - `train_samples`: Training TapSample dataset
 /// - `val_samples`: Validation TapSample dataset
 /// - `test_samples`: Test TapSample dataset (held-out, evaluated only after training)
-/// - `class_weights`: Platform-specific inverse class frequency weights [3]
+/// - `class_weights`: Platform-specific inverse class frequency weights `[3]`
 /// - `config`: Training configuration (epochs, batch_size, lr, etc.)
 /// - `checkpoint_dir`: Directory to save .mpk checkpoints
 /// - `device`: Device for computation
@@ -2415,7 +2415,7 @@ mod tests {
         // Create a temporary directory structure for synthetic dataset
         let temp_dir = tempdir().expect("Failed to create temp dir");
         let data_dir = temp_dir.path().join("data");
-        let audio_dir = data_dir.join("Sound_Iphone"); // Match expected directory name
+        let audio_dir = data_dir.join("sound_iphone");
         let artifacts_dir = temp_dir.path().join("artifacts");
 
         fs::create_dir_all(&audio_dir).expect("Failed to create audio dir");
