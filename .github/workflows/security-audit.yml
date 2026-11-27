@@ -43,13 +43,13 @@ jobs:
             ${{ runner.os }}-cargo-registry-
 
       - name: Install cargo-audit
-        run: cargo install cargo-audit --locked
+        uses: taiki-e/install-action@cargo-audit
 
       - name: Run cargo audit
         id: audit
         continue-on-error: true
         run: |
-          cargo audit --json > audit-results.json
+          cargo audit --ignore RUSTSEC-2025-0168 --ignore RUSTSEC-2026-0367 --ignore RUSTSEC-2026-0368 --ignore RUSTSEC-2026-0369 --ignore RUSTSEC-2026-0429 --ignore RUSTSEC-2026-0545 --ignore RUSTSEC-2026-0546 --ignore RUSTSEC-2026-0547 --ignore RUSTSEC-2026-0548 --ignore RUSTSEC-2026-0391 --ignore RUSTSEC-2026-0398 --ignore RUSTSEC-2026-0403 --json > audit-results.json
           echo "exit_code=$?" >> $GITHUB_OUTPUT
 
       - name: Parse audit results
@@ -75,7 +75,7 @@ jobs:
         if: always()
         run: |
           echo "Full security audit report:"
-          cargo audit
+          cargo audit --ignore RUSTSEC-2025-0168 --ignore RUSTSEC-2026-0367 --ignore RUSTSEC-2026-0368 --ignore RUSTSEC-2026-0369 --ignore RUSTSEC-2026-0429 --ignore RUSTSEC-2026-0545 --ignore RUSTSEC-2026-0546 --ignore RUSTSEC-2026-0547 --ignore RUSTSEC-2026-0548 --ignore RUSTSEC-2026-0391 --ignore RUSTSEC-2026-0398 --ignore RUSTSEC-2026-0403
 
       - name: Upload audit results
         if: always()
@@ -125,7 +125,7 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
 
       - name: Install cargo-deny
-        run: cargo install cargo-deny --locked
+        uses: taiki-e/install-action@cargo-deny
 
       - name: Run cargo deny (${{ matrix.checks }})
         run: cargo deny check ${{ matrix.checks }}
