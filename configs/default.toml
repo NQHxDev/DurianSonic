@@ -15,18 +15,18 @@ top_db = 80.0
 data_dir = "data"
 iphone_metadata = "data/metadata_iphone.csv"
 android_metadata = "data/metadata_android.csv"
-train_ratio = 0.70
-val_ratio = 0.15
-test_ratio = 0.15
+train_ratio = 0.80
+val_ratio = 0.10
+test_ratio = 0.10
 split_seed = 42
 
 [training]
-epochs = 80
+epochs = 120
 batch_size = 32
-learning_rate = 0.0003
-weight_decay = 0.0001
-label_smoothing = 0.05
-early_stopping_patience = 12
+learning_rate = 0.0005
+weight_decay = 0.00005
+label_smoothing = 0.1
+early_stopping_patience = 20
 
 [model]
 architecture = "durian_audio_cnn_small"
@@ -35,6 +35,6 @@ input_height = 128
 input_width = 128
 physics_features_dim = 4
 num_classes = 3
-dropout = 0.3
-hidden_layers = [128, 64]
+dropout = 0.4
+hidden_layers = [256, 128, 64]
 activation = "relu"

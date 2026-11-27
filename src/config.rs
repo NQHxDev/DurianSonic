@@ -294,6 +294,22 @@ fn default_dropout() -> f64 {
     0.3
 }
 
+impl Default for ModelConfig {
+    fn default() -> Self {
+        Self {
+            hidden_layers: vec![],
+            activation: "relu".to_string(),
+            architecture: default_architecture(),
+            input_channels: default_input_channels(),
+            input_height: default_input_height(),
+            input_width: default_input_width(),
+            physics_features_dim: default_physics_features_dim(),
+            num_classes: default_num_classes(),
+            dropout: default_dropout(),
+        }
+    }
+}
+
 impl Default for Config {
     fn default() -> Self {
         Self {

@@ -1,10 +1,12 @@
 use criterion::{criterion_group, criterion_main, Criterion};
 use std::hint::black_box;
 
+use burn::tensor::{Device, Tensor};
 use durian_sonic::dsp::{
     build_mel_filterbank, extract_tap_features, extract_tap_impulses, ImpulseConfig,
     SpectrogramConfig,
 };
+use durian_sonic::model::DurianAudioCnn;
 use durian_sonic::training::{GradientDescent, LearningRateSchedule};
 
 fn benchmark_gradient_descent(c: &mut Criterion) {
@@ -64,10 +66,28 @@ fn benchmark_learning_rate_schedules(c: &mut Criterion) {
 fn benchmark_model_training(c: &mut Criterion) {
     let mut group = c.benchmark_group("model_training");
 
-    // Add more comprehensive training benchmarks here
+    // Benchmark: DurianAudioCnn::forward (single-tap inference)
+    // Target: < 8.0 ms per tap on CPU (Constitution §IV)
     group.bench_function("forward_pass", |b| {
-        // Placeholder benchmark - will be implemented with model structure
-        b.iter(|| black_box(42));
+        let device = Device::default();
+
+        // Initialize model
+        let model = DurianAudioCnn::new(3, 0.3, &device);
+
+        // Create synthetic input tensors [1, 1, 128, 128] and [1, 4]
+        let mel_data = vec![0.5f32; 128 * 128];
+        let phys_data = vec![0.3f32, 0.5f32, 0.7f32, 0.9f32];
+
+        let mel_spec = Tensor::<4>::from_data(
+            burn::tensor::TensorData::new(mel_data, [1, 1, 128, 128]),
+            &device,
+        );
+        let phys_feats =
+            Tensor::<2>::from_data(burn::tensor::TensorData::new(phys_data, [1, 4]), &device);
+
+        b.iter(|| {
+            let _logits = model.forward(black_box(mel_spec.clone()), black_box(phys_feats.clone()));
+        });
     });
 
     group.finish();

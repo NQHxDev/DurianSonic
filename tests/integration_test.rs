@@ -25,7 +25,7 @@ fn test_empty_data_handling() {
     let empty_data: Vec<f64> = vec![];
 
     assert_eq!(mean(&empty_data), None);
-    assert_eq!(normalize(&empty_data), vec![]);
+    assert_eq!(normalize(&empty_data), Vec::<f64>::new());
 }
 
 #[test]

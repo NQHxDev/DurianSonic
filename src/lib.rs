@@ -3,6 +3,7 @@ pub mod augment;
 pub mod config;
 pub mod dataset;
 pub mod dsp;
+pub mod model;
 pub mod training;
 
 /// Calculate mean of a vector
