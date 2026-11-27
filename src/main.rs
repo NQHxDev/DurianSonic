@@ -70,6 +70,16 @@ fn print_confusion_matrix(cm: &[[usize; 3]; 3]) {
 }
 
 fn main() -> Result<()> {
+    // Initialize tracing subscriber for logging
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
+        )
+        .with_target(false)
+        .with_writer(std::io::stderr)
+        .init();
+
     let cli = Cli::parse();
 
     match cli.command {
@@ -166,7 +176,7 @@ fn verify_dataset_command(data_dir_override: Option<PathBuf>, config_path: PathB
         );
 
         // Perform stratified group split
-        println!("Performing anti-leakage stratified group split...");
+        tracing::info!("Performing anti-leakage stratified group split...");
         let splits = stratified_group_split_by_fruit(
             &records,
             config.dataset.train_ratio,
@@ -297,13 +307,16 @@ fn train_command(
     // Device selection logic
     let device = match device_str.to_lowercase().as_str() {
         "cpu" => {
+            tracing::info!("Device: CPU (forced)");
             println!("Device: CPU (forced)\n");
             burn::tensor::Device::flex().autodiff()
         }
         "gpu" => {
+            tracing::info!("Device: GPU (forced)");
             println!("Device: GPU (forced)");
             match burn::tensor::Device::wgpu_options().init() {
                 Ok(gpu_device) => {
+                    tracing::info!("GPU device initialized successfully");
                     println!("GPU device initialized successfully\n");
                     gpu_device.autodiff()
                 }
@@ -319,17 +332,21 @@ fn train_command(
             let is_ci = std::env::var("CI").is_ok() || std::env::var("GITHUB_ACTIONS").is_ok();
 
             if is_ci {
+                tracing::info!("Device: CPU (CI environment detected, skipping GPU probe)");
                 println!("Device: CPU (CI environment detected, skipping GPU probe)\n");
                 burn::tensor::Device::flex().autodiff()
             } else {
                 // Try GPU first, fallback to CPU
+                tracing::info!("Device: Auto-detecting...");
                 println!("Device: Auto-detecting...");
                 match burn::tensor::Device::wgpu_options().init() {
                     Ok(gpu_device) => {
+                        tracing::info!("GPU device detected and initialized (Metal/Vulkan/DX12)");
                         println!("GPU device detected and initialized (Metal/Vulkan/DX12)\n");
                         gpu_device.autodiff()
                     }
                     Err(_) => {
+                        tracing::info!("No GPU available, falling back to CPU");
                         println!("No GPU available, falling back to CPU\n");
                         burn::tensor::Device::flex().autodiff()
                     }
@@ -338,6 +355,7 @@ fn train_command(
         }
     };
 
+    tracing::info!("Starting training...");
     println!("Starting training...\n");
 
     // Run training

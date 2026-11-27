@@ -304,7 +304,7 @@ pub fn extract_dataset_tap_samples(
     }
 
     if total_files > 0 {
-        println!();
+        tracing::debug!("Extraction complete");
     }
 
     Ok(all_samples)
@@ -1034,9 +1034,22 @@ pub fn train_model_on_splits(
     let total_batches = splits.train.len().div_ceil(batch_size.max(1));
 
     use std::io::Write;
+    tracing::info!(
+        "Starting training: {} epochs max, batch_size={}, {} batches/epoch, patience={}",
+        epochs,
+        batch_size,
+        total_batches,
+        patience
+    );
     println!(
         "\n[3/3] Training DurianAudioCnn ({} epochs max, batch_size={}, {} batches/epoch, patience={}):",
         epochs, batch_size, total_batches, patience
+    );
+    tracing::info!(
+        "Tap windows: Train={} | Val={} | Test={}",
+        splits.train.len(),
+        splits.val.len(),
+        splits.test.len()
     );
     println!(
         "      Tap windows: Train={} | Val={} | Test={}\n",
@@ -1186,6 +1199,7 @@ pub fn train_model_on_splits(
                 best_checkpoint_path = Some(checkpoint_path.clone());
                 tracing::info!("Checkpoint saved: {}", checkpoint_path.display());
 
+                // User-facing progress line
                 println!(
                     "\r      Epoch {:02}/{:02} [{:5.1}s] | Train Loss: {:.4} | Val Tap F1: {:.4} | Val Rec F1: {:.4} (Acc: {:5.1}%) | * BEST (saved)",
                     epoch,
@@ -1204,6 +1218,7 @@ pub fn train_model_on_splits(
                     early_stopping.patience_counter,
                     patience
                 );
+                // User-facing progress line
                 println!(
                     "\r      Epoch {:02}/{:02} [{:5.1}s] | Train Loss: {:.4} | Val Tap F1: {:.4} | Val Rec F1: {:.4} (Acc: {:5.1}%) | Patience: {}/{}",
                     epoch,
@@ -1222,6 +1237,7 @@ pub fn train_model_on_splits(
                     "Early stopping triggered at epoch {} (patience exhausted)",
                     epoch
                 );
+                // User-facing progress line
                 println!(
                     "\r      Epoch {:02}/{:02} [{:5.1}s] | Train Loss: {:.4} | Val Tap F1: {:.4} | Val Rec F1: {:.4} (Acc: {:5.1}%) | STOP (patience {}/{})",
                     epoch,
@@ -1242,6 +1258,11 @@ pub fn train_model_on_splits(
     // Restore best checkpoint using Burn 0.22.1 store API
     let best_path = best_checkpoint_path
         .ok_or_else(|| anyhow::anyhow!("No checkpoint was saved during training"))?;
+    tracing::info!(
+        "Restoring best checkpoint (epoch {}, Val Rec F1: {:.4}) and evaluating on Test set...",
+        early_stopping.best_epoch,
+        early_stopping.best_macro_f1
+    );
     println!(
         "\n      Restoring best checkpoint (epoch {}, Val Rec F1: {:.4}) and evaluating on Test set...",
         early_stopping.best_epoch, early_stopping.best_macro_f1
@@ -1333,6 +1354,7 @@ pub fn run_platform_training(
 
     // Load and verify metadata
     use std::io::Write;
+    tracing::info!("Loading and verifying dataset metadata (SHA-256)...");
     println!("[1/3] Loading and verifying dataset metadata (SHA-256)...");
     let _ = std::io::stdout().flush();
 
@@ -1350,6 +1372,14 @@ pub fn run_platform_training(
         config.dataset.split_seed,
     )?;
 
+    tracing::info!(
+        "Verified {} files ({} unique fruits) | Class weights: [{:.3}, {:.3}, {:.3}]",
+        integrity_report.total_files,
+        integrity_report.unique_fruits,
+        class_weights[0],
+        class_weights[1],
+        class_weights[2]
+    );
     println!(
         "      Verified {} files ({} unique fruits) | Class weights: [{:.3}, {:.3}, {:.3}]",
         integrity_report.total_files,
@@ -1358,11 +1388,20 @@ pub fn run_platform_training(
         class_weights[1],
         class_weights[2]
     );
+    tracing::info!(
+        "Anti-leakage split: Train={} files, Val={} files, Test={} files",
+        splits.train.len(),
+        splits.val.len(),
+        splits.test.len()
+    );
     println!(
         "      Anti-leakage split: Train={} files, Val={} files, Test={} files\n",
         splits.train.len(),
         splits.val.len(),
         splits.test.len()
+    );
+    tracing::info!(
+        "Extracting DSP tap features (22.05 kHz, Log-Mel 128x128 + 4 physics features)..."
     );
     println!(
         "[2/3] Extracting DSP tap features (22.05 kHz, Log-Mel 128x128 + 4 physics features)..."

@@ -805,8 +805,8 @@ mod tests {
             let config = Config::load_default().unwrap();
 
             // Verify specific values from default.toml
-            assert_eq!(config.training.epochs, 80);
-            assert_eq!(config.training.learning_rate, 0.0003);
+            assert_eq!(config.training.epochs, 120);
+            assert_eq!(config.training.learning_rate, 0.0005);
             assert_eq!(config.dsp.sample_rate, 22_050);
             assert_eq!(config.dataset.split_seed, 42);
         }

@@ -51,12 +51,19 @@ if [ -n "$STAGED_RS_FILES" ]; then
         fi
     done
 
-    # Check for debug prints
+    # Check for debug prints (dbg! macro only - println!/eprintln! are legitimate for CLI output)
+    DEBUG_FOUND=0
     for file in $STAGED_RS_FILES; do
-        if grep -n "println!\|dbg!\|eprintln!" "$file" | grep -v "^[[:space:]]*//"; then
-            echo "${YELLOW}! Found debug prints in $file (consider removing or using proper logging)${NC}"
+        # Only flag dbg! macro - println!/eprintln! are valid for CLI applications
+        if grep -n "dbg!" "$file" | grep -v "^[[:space:]]*//"; then
+            echo "${YELLOW}! Found dbg! macro in $file (consider removing or using proper logging)${NC}"
+            DEBUG_FOUND=1
         fi
     done
+
+    if [ $DEBUG_FOUND -eq 0 ]; then
+        echo "${GREEN}  No debug macros found${NC}"
+    fi
 fi
 echo "${GREEN}✓ Staged file checks passed${NC}\n"
 
