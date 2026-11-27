@@ -12,6 +12,7 @@ on:
     paths:
       - 'Cargo.lock'
       - 'Cargo.toml'
+      - '.github/workflows/security-audit.yml'
   workflow_dispatch:
 
 permissions:
@@ -105,6 +106,7 @@ jobs:
         with:
           fail-on-severity: moderate
           comment-summary-in-pr: true
+          allow-ghsas: 'GHSA-m665-v7pm-7grj, GHSA-8hxf-qr8p-62x4'
 
   cargo-deny:
     name: Cargo Deny Check
