@@ -1,5 +1,9 @@
 // Module declarations
+pub mod augment;
 pub mod config;
+pub mod dataset;
+pub mod dsp;
+pub mod model;
 pub mod training;
 
 /// Calculate mean of a vector
@@ -60,7 +64,7 @@ mod tests {
     fn test_normalize_empty() {
         let data: Vec<f64> = vec![];
         let normalized = normalize(&data);
-        assert_eq!(normalized, vec![]);
+        assert_eq!(normalized, Vec::<f64>::new());
     }
 
     #[test]

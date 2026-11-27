@@ -11,6 +11,7 @@ Runs before each commit to ensure code quality:
 - Code formatting (`cargo fmt --check`)
 - Lint checks (`cargo clippy`)
 - Common issues detection (debug prints, TODOs)
+- Git LFS auto-tracking for `.json` and `.md` files >= 500KB
 
 ### pre-push (Comprehensive checks)
 
@@ -22,6 +23,11 @@ Runs before pushing to ensure production readiness:
 - Doc tests (`cargo test --doc`)
 - Documentation (`cargo doc`)
 - Benchmarks compilation (if benches/ exists)
+- Git LFS push object verification
+
+### post-checkout, post-commit, post-merge
+
+- Git LFS state synchronization across git operations
 
 ## Installation
 
@@ -33,10 +39,10 @@ Run the installation script:
 
 Or manually:
 
-```bash
-chmod +x .githooks/pre-commit .githooks/pre-push
+````bash
+chmod +x .githooks/*
 git config core.hooksPath .githooks
-```
+git lfs install --skip-repo
 
 ## Usage
 
@@ -47,7 +53,7 @@ Hooks run automatically:
 ```bash
 git commit -m "feat: add new feature"  # Runs pre-commit
 git push                                # Runs pre-push
-```
+````
 
 ### Skip hooks temporarily
 

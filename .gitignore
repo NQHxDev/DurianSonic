@@ -32,3 +32,12 @@ coverage/
 *.profdata
 lcov.info
 cobertura.xml
+
+# Dataset
+data/
+
+# Local Development
+Development.md
+
+# Model Train
+artifacts/

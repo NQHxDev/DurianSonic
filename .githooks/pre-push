@@ -5,6 +5,12 @@
 
 set -e
 
+# Buffer stdin from git for Git LFS before any subcommands run
+PRE_PUSH_STDIN=""
+if [ ! -t 0 ]; then
+    PRE_PUSH_STDIN=$(cat)
+fi
+
 # Colors for output
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -83,6 +89,20 @@ fi
 if command -v cargo-udeps >/dev/null 2>&1; then
     echo "${YELLOW}[Extra] Checking for unused dependencies...${NC}"
     cargo +nightly udeps --all-targets 2>/dev/null || echo "${YELLOW}! Could not check unused dependencies${NC}"
+fi
+
+# 8. Git LFS pre-push
+echo "${YELLOW}[Git LFS] Verifying and uploading Git LFS objects...${NC}"
+if command -v git-lfs >/dev/null 2>&1; then
+    if [ -n "$PRE_PUSH_STDIN" ]; then
+        printf "%s\n" "$PRE_PUSH_STDIN" | git lfs pre-push "$@"
+    else
+        git lfs pre-push "$@" </dev/null
+    fi
+    echo "${GREEN}✓ Git LFS objects synced${NC}\n"
+else
+    echo "${RED}✗ Error: git-lfs is not installed or not in PATH${NC}"
+    exit 2
 fi
 
 echo "${GREEN}✓ All pre-push checks passed!${NC}\n"

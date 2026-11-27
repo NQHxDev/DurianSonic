@@ -38,7 +38,7 @@ fi
 echo "${GREEN}✓ Clippy checks passed${NC}\n"
 
 # 3. Check for common issues in staged files
-echo "${YELLOW}[3/3] Checking staged files...${NC}"
+echo "${YELLOW}[3/4] Checking staged files...${NC}"
 
 # Get list of staged Rust files
 STAGED_RS_FILES=$(git diff --cached --name-only --diff-filter=ACM | grep '\.rs$' || true)
@@ -51,13 +51,54 @@ if [ -n "$STAGED_RS_FILES" ]; then
         fi
     done
 
-    # Check for debug prints
+    # Check for debug prints (dbg! macro only - println!/eprintln! are legitimate for CLI output)
+    DEBUG_FOUND=0
     for file in $STAGED_RS_FILES; do
-        if grep -n "println!\|dbg!\|eprintln!" "$file" | grep -v "^[[:space:]]*//"; then
-            echo "${YELLOW}! Found debug prints in $file (consider removing or using proper logging)${NC}"
+        # Only flag dbg! macro - println!/eprintln! are valid for CLI applications
+        if grep -n "dbg!" "$file" | grep -v "^[[:space:]]*//"; then
+            echo "${YELLOW}! Found dbg! macro in $file (consider removing or using proper logging)${NC}"
+            DEBUG_FOUND=1
         fi
     done
+
+    if [ $DEBUG_FOUND -eq 0 ]; then
+        echo "${GREEN}  No debug macros found${NC}"
+    fi
 fi
+echo "${GREEN}✓ Staged file checks passed${NC}\n"
+
+# 4. Check for large JSON and Markdown files (>= 500KB) and track with Git LFS
+echo "${YELLOW}[4/4] Checking large JSON/MD files for Git LFS...${NC}"
+LFS_THRESHOLD_BYTES=${LFS_THRESHOLD_BYTES:-512000} # 500 KB (512,000 bytes)
+
+STAGED_DOC_FILES=$(git diff --cached --name-only --diff-filter=ACM | grep -E '\.(json|md)$' || true)
+
+if [ -n "$STAGED_DOC_FILES" ]; then
+    while IFS= read -r file; do
+        [ -z "$file" ] && continue
+        if [ -f "$file" ]; then
+            FILE_SIZE=$(wc -c < "$file" | tr -d ' ')
+            if [ "$FILE_SIZE" -ge "$LFS_THRESHOLD_BYTES" ]; then
+                ATTR=$(git check-attr filter -- "$file" 2>/dev/null | awk '{print $NF}')
+                if [ "$ATTR" != "lfs" ]; then
+                    if ! command -v git-lfs >/dev/null 2>&1; then
+                        echo "${RED}✗ Error: Large file detected ($((FILE_SIZE / 1024)) KB >= 500 KB): $file${NC}"
+                        echo "${RED}  git-lfs is required but not installed or not in PATH.${NC}"
+                        exit 1
+                    fi
+                    echo "${YELLOW}! Detected large file ($((FILE_SIZE / 1024)) KB >= 500 KB): $file${NC}"
+                    echo "${BLUE}  -> Automatically tracking with Git LFS...${NC}"
+                    git lfs track "$file"
+                    git add .gitattributes "$file"
+                    echo "${GREEN}  ✓ Added $file to Git LFS tracking (.gitattributes updated)${NC}"
+                fi
+            fi
+        fi
+    done <<EOF
+$STAGED_DOC_FILES
+EOF
+fi
+echo "${GREEN}✓ Git LFS checks passed${NC}\n"
 
 echo "${GREEN}✓ All pre-commit checks passed!${NC}\n"
 echo "${GREEN}Ready to commit${NC}"

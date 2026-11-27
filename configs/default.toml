@@ -1,8 +1,40 @@
+[dsp]
+sample_rate = 22_050
+window_sec = 0.8
+pre_onset_sec = 0.1
+min_interval_sec = 0.4
+threshold_ratio = 0.25
+n_fft = 1024
+hop_length = 128
+n_mels = 128
+fmin = 50.0
+fmax = 8_000.0
+top_db = 80.0
+
+[dataset]
+data_dir = "data"
+iphone_metadata = "data/metadata_iphone.csv"
+android_metadata = "data/metadata_android.csv"
+train_ratio = 0.80
+val_ratio = 0.10
+test_ratio = 0.10
+split_seed = 42
+
 [training]
-epochs = 100
+epochs = 120
 batch_size = 32
-learning_rate = 0.001
+learning_rate = 0.0005
+weight_decay = 0.00005
+label_smoothing = 0.1
+early_stopping_patience = 20
 
 [model]
-hidden_layers = [128, 64]
+architecture = "durian_audio_cnn_small"
+input_channels = 1
+input_height = 128
+input_width = 128
+physics_features_dim = 4
+num_classes = 3
+dropout = 0.4
+hidden_layers = [256, 128, 64]
 activation = "relu"

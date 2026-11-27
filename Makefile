@@ -10,9 +10,16 @@ help:
 	@echo "  make release           - Build optimized release"
 	@echo "  make watch             - Run with auto-reload"
 	@echo ""
+	@echo "Training:"
+	@echo "  make train-iphone      - Train iPhone model (auto GPU/CPU)"
+	@echo "  make train-android     - Train Android model (auto GPU/CPU)"
+	@echo "  make train-iphone-cpu  - Train iPhone model (force CPU)"
+	@echo "  make train-iphone-gpu  - Train iPhone model (force GPU)"
+	@echo ""
 	@echo "Testing & Quality:"
 	@echo "  make test              - Run tests"
 	@echo "  make test-all          - Run tests with output"
+	@echo "  make verify-data       - Verify dataset"
 	@echo "  make bench             - Run benchmarks"
 	@echo "  make bench-save        - Save benchmark baseline"
 	@echo "  make coverage          - Generate code coverage report"
@@ -34,6 +41,7 @@ help:
 	@echo "  make uninstall         - Uninstall binary"
 	@echo "  make clean             - Clean build artifacts"
 	@echo "  make all               - Format, lint, test, and build"
+	@echo "  make kill              - Kill process Cargo"
 
 .PHONY: run
 run:
@@ -54,6 +62,34 @@ test:
 .PHONY: test-all
 test-all:
 	cargo test -- --nocapture --test-threads=1
+
+.PHONY: verify-data
+verify-data:
+	cargo run -- verify-dataset --config configs/default.toml --data-dir data
+
+.PHONY: train-iphone
+train-iphone:
+	cargo run --release -- train --platform iphone --device auto
+
+.PHONY: train-android
+train-android:
+	cargo run --release -- train --platform android --device auto
+
+.PHONY: train-iphone-cpu
+train-iphone-cpu:
+	cargo run --release -- train --platform iphone --device cpu
+
+.PHONY: train-iphone-gpu
+train-iphone-gpu:
+	cargo run --release -- train --platform iphone --device gpu
+
+.PHONY: train-android-cpu
+train-android-cpu:
+	cargo run --release -- train --platform android --device cpu
+
+.PHONY: train-android-gpu
+train-android-gpu:
+	cargo run --release -- train --platform android --device gpu
 
 .PHONY: bench
 bench:
@@ -122,3 +158,8 @@ watch:
 
 .PHONY: all
 all: fmt clippy test build
+
+.PHONY: kill
+kill:
+	-pkill -9 cargo && sleep 1
+	@echo "Killed Cargo Processes..."
