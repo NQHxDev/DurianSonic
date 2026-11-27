@@ -69,7 +69,7 @@ fn benchmark_model_training(c: &mut Criterion) {
     // Benchmark: DurianAudioCnn::forward (single-tap inference)
     // Target: < 8.0 ms per tap on CPU (Constitution §IV)
     group.bench_function("forward_pass", |b| {
-        let device = Device::default();
+        let device = Device::flex();
 
         // Initialize model
         let model = DurianAudioCnn::new(3, 0.3, &device);
